@@ -6,6 +6,8 @@ import (
 	"strconv"
 )
 
+// useGoCoreUtils 控制是否使用 Go 实现的核心工具替代系统命令。
+// 默认在 Windows 上启用，可通过 CRUSH_CORE_UTILS 环境变量覆盖。
 var useGoCoreUtils bool
 
 func init() {

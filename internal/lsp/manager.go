@@ -1,4 +1,4 @@
-// Package lsp provides a manager for Language Server Protocol (LSP) clients.
+// Package lsp 提供语言服务器协议（LSP）客户端的管理功能。
 package lsp
 
 import (
@@ -21,17 +21,19 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
+// unavailable 记录不可用的 LSP 服务器（命令未找到等）。
 var unavailable = csync.NewMap[string, struct{}]()
 
-// Manager handles lazy initialization of LSP clients based on file types.
+// Manager 管理 LSP 客户端的懒加载初始化，根据文件类型自动选择合适的语言服务器。
 type Manager struct {
-	clients  *csync.Map[string, *Client]
-	cfg      *config.ConfigStore
-	manager  *powernapconfig.Manager
-	callback func(name string, client *Client)
+	clients  *csync.Map[string, *Client] // 已初始化的 LSP 客户端缓存
+	cfg      *config.ConfigStore          // 配置存储
+	manager  *powernapconfig.Manager      // LSP 服务器配置管理器
+	callback func(name string, client *Client) // 客户端初始化完成的回调
 }
 
-// NewManager creates a new LSP manager service.
+// NewManager 创建一个新的 LSP 管理器。
+// 加载默认配置并合并用户自定义的 LSP 配置。
 func NewManager(cfg *config.ConfigStore) *Manager {
 	manager := powernapconfig.NewManager()
 	manager.LoadDefaults()

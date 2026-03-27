@@ -1,5 +1,4 @@
-// Package app wires together services, coordinates agents, and manages
-// application lifecycle.
+// Package app 组装各服务、协调 Agent 并管理应用程序生命周期。
 package app
 
 import (
@@ -43,21 +42,22 @@ import (
 	"github.com/charmbracelet/x/term"
 )
 
-// UpdateAvailableMsg is sent when a new version is available.
+// UpdateAvailableMsg 在检测到新版本时发送。
 type UpdateAvailableMsg struct {
-	CurrentVersion string
-	LatestVersion  string
-	IsDevelopment  bool
+	CurrentVersion string // 当前版本
+	LatestVersion  string // 最新版本
+	IsDevelopment  bool   // 是否为开发版本
 }
 
+// App 是应用程序的核心结构，组装所有服务并管理生命周期。
 type App struct {
-	Sessions    session.Service
-	Messages    message.Service
-	History     history.Service
-	Permissions permission.Service
-	FileTracker filetracker.Service
+	Sessions    session.Service     // 会话管理服务
+	Messages    message.Service     // 消息管理服务
+	History     history.Service     // 文件历史服务
+	Permissions permission.Service  // 权限管理服务
+	FileTracker filetracker.Service // 文件跟踪服务
 
-	AgentCoordinator agent.Coordinator
+	AgentCoordinator agent.Coordinator // Agent 协调器
 
 	LSPManager *lsp.Manager
 

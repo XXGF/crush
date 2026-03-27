@@ -11,13 +11,16 @@ import (
 )
 
 const (
+	// InitFlagFilename 是项目初始化标志文件的名称。
 	InitFlagFilename = "init"
 )
 
+// ProjectInitFlag 表示项目初始化状态。
 type ProjectInitFlag struct {
 	Initialized bool `json:"initialized"`
 }
 
+// Init 加载配置并初始化配置存储。
 func Init(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 	store, err := Load(workingDir, dataDir, debug)
 	if err != nil {
@@ -26,6 +29,12 @@ func Init(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 	return store, nil
 }
 
+// ProjectNeedsInitialization 检查项目是否需要初始化。
+//
+// 以下情况无需初始化：
+//   - 已存在初始化标志文件
+//   - 已存在上下文文件（如 SKILL.md、.cursorrules 等）
+//   - 工作目录为空
 func ProjectNeedsInitialization(store *ConfigStore) (bool, error) {
 	if store == nil {
 		return false, fmt.Errorf("config not loaded")
@@ -63,6 +72,7 @@ func ProjectNeedsInitialization(store *ConfigStore) (bool, error) {
 	return true, nil
 }
 
+// contextPathsExist 检查目录中是否存在默认的上下文文件（大小写不敏感）。
 func contextPathsExist(dir string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -91,7 +101,7 @@ func contextPathsExist(dir string) (bool, error) {
 	return false, nil
 }
 
-// dirHasNoVisibleFiles returns true if the directory has no files/dirs after applying ignore rules.
+// dirHasNoVisibleFiles 检查目录在应用忽略规则后是否为空。
 func dirHasNoVisibleFiles(dir string) (bool, error) {
 	files, _, err := fsext.ListDirectory(dir, nil, 1, 1)
 	if err != nil {
@@ -100,6 +110,7 @@ func dirHasNoVisibleFiles(dir string) (bool, error) {
 	return len(files) == 0, nil
 }
 
+// MarkProjectInitialized 创建初始化标志文件，标记项目已完成初始化。
 func MarkProjectInitialized(store *ConfigStore) error {
 	if store == nil {
 		return fmt.Errorf("config not loaded")
@@ -115,6 +126,7 @@ func MarkProjectInitialized(store *ConfigStore) error {
 	return nil
 }
 
+// HasInitialDataConfig 检查是否存在全局数据配置文件且已完成配置。
 func HasInitialDataConfig(store *ConfigStore) bool {
 	if store == nil {
 		return false

@@ -9,13 +9,14 @@ import (
 )
 
 const (
+	// loopDetectionWindowSize 是循环检测的滑动窗口大小（检查最近 N 步）。
 	loopDetectionWindowSize = 10
+	// loopDetectionMaxRepeats 是允许的最大重复次数，超过则判定为循环。
 	loopDetectionMaxRepeats = 5
 )
 
-// hasRepeatedToolCalls checks whether the agent is stuck in a loop by looking
-// at recent steps. It examines the last windowSize steps and returns true if
-// any tool-call signature appears more than maxRepeats times.
+// hasRepeatedToolCalls 检测 Agent 是否陷入工具调用循环。
+// 检查最近 windowSize 步中是否有相同的工具调用签名出现超过 maxRepeats 次。
 func hasRepeatedToolCalls(steps []fantasy.StepResult, windowSize, maxRepeats int) bool {
 	if len(steps) < windowSize {
 		return false
@@ -38,17 +39,16 @@ func hasRepeatedToolCalls(steps []fantasy.StepResult, windowSize, maxRepeats int
 	return false
 }
 
-// getToolInteractionSignature computes a hash signature for the tool
-// interactions in a single step's content. It pairs tool calls with their
-// results (matched by ToolCallID) and returns a hex-encoded SHA-256 hash.
-// If the step contains no tool calls, it returns "".
+// getToolInteractionSignature 计算单步中工具交互的哈希签名。
+// 将工具调用与其结果配对（通过 ToolCallID），生成 SHA-256 哈希。
+// 如果该步不包含工具调用，返回空字符串。
 func getToolInteractionSignature(content fantasy.ResponseContent) string {
 	toolCalls := content.ToolCalls()
 	if len(toolCalls) == 0 {
 		return ""
 	}
 
-	// Index tool results by their ToolCallID for fast lookup.
+	// 按 ToolCallID 索引工具结果，便于快速查找。
 	resultsByID := make(map[string]fantasy.ToolResultContent)
 	for _, tr := range content.ToolResults() {
 		resultsByID[tr.ToolCallID] = tr
@@ -70,8 +70,7 @@ func getToolInteractionSignature(content fantasy.ResponseContent) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// toolResultOutputString converts a ToolResultOutputContent to a stable string
-// representation for signature comparison.
+// toolResultOutputString 将工具结果转换为稳定的字符串表示，用于签名比较。
 func toolResultOutputString(result fantasy.ToolResultOutputContent) string {
 	if result == nil {
 		return ""

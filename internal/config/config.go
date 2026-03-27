@@ -22,11 +22,16 @@ import (
 )
 
 const (
-	appName              = "crush"
+	// appName 是应用程序名称。
+	appName = "crush"
+	// defaultDataDirectory 是默认的项目数据目录名。
 	defaultDataDirectory = ".crush"
-	defaultInitializeAs  = "AGENTS.md"
+	// defaultInitializeAs 是默认的初始化文件名。
+	defaultInitializeAs = "AGENTS.md"
 )
 
+// defaultContextPaths 是项目上下文文件的默认搜索路径列表。
+// 支持多种 AI 编程工具的配置文件格式。
 var defaultContextPaths = []string{
 	".github/copilot-instructions.md",
 	".cursorrules",
@@ -46,38 +51,42 @@ var defaultContextPaths = []string{
 	"Agents.md",
 }
 
+// SelectedModelType 表示模型的用途类型。
 type SelectedModelType string
 
-// String returns the string representation of the [SelectedModelType].
+// String 返回 SelectedModelType 的字符串表示。
 func (s SelectedModelType) String() string {
 	return string(s)
 }
 
 const (
+	// SelectedModelTypeLarge 表示大模型，用于复杂任务。
 	SelectedModelTypeLarge SelectedModelType = "large"
+	// SelectedModelTypeSmall 表示小模型，用于轻量任务（如标题生成、摘要）。
 	SelectedModelTypeSmall SelectedModelType = "small"
 )
 
 const (
+	// AgentCoder 是编程代理的标识符。
 	AgentCoder string = "coder"
-	AgentTask  string = "task"
+	// AgentTask 是任务代理的标识符。
+	AgentTask string = "task"
 )
 
+// SelectedModel 表示用户选择的模型配置。
 type SelectedModel struct {
-	// The model id as used by the provider API.
-	// Required.
+	// Model 是模型提供商 API 使用的模型 ID，必填。
 	Model string `json:"model" jsonschema:"required,description=The model ID as used by the provider API,example=gpt-4o"`
-	// The model provider, same as the key/id used in the providers config.
-	// Required.
+	// Provider 是模型提供商的标识符，必须与 providers 配置中的键匹配，必填。
 	Provider string `json:"provider" jsonschema:"required,description=The model provider ID that matches a key in the providers config,example=openai"`
 
-	// Only used by models that use the openai provider and need this set.
+	// ReasoningEffort 是 OpenAI 模型的推理努力级别（可选）。
 	ReasoningEffort string `json:"reasoning_effort,omitempty" jsonschema:"description=Reasoning effort level for OpenAI models that support it,enum=low,enum=medium,enum=high"`
 
-	// Used by anthropic models that can reason to indicate if the model should think.
+	// Think 是否启用 Anthropic 模型的思考模式（可选）。
 	Think bool `json:"think,omitempty" jsonschema:"description=Enable thinking mode for Anthropic models that support reasoning"`
 
-	// Overrides the default model configuration.
+	// MaxTokens 覆盖默认的模型最大 Token 数（可选）。
 	MaxTokens        int64    `json:"max_tokens,omitempty" jsonschema:"description=Maximum number of tokens for model responses,maximum=200000,example=4096"`
 	Temperature      *float64 `json:"temperature,omitempty" jsonschema:"description=Sampling temperature,minimum=0,maximum=1,example=0.7"`
 	TopP             *float64 `json:"top_p,omitempty" jsonschema:"description=Top-p (nucleus) sampling parameter,minimum=0,maximum=1,example=0.9"`

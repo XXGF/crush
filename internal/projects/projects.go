@@ -1,3 +1,7 @@
+// Package projects 提供项目目录的跟踪和管理功能。
+//
+// 将用户访问过的项目目录持久化到 projects.json 文件中，
+// 支持按最近访问时间排序。
 package projects
 
 import (
@@ -11,28 +15,31 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 )
 
+// projectsFileName 是项目列表的存储文件名。
 const projectsFileName = "projects.json"
 
-// Project represents a tracked project directory.
+// Project 表示一个被跟踪的项目目录。
 type Project struct {
-	Path         string    `json:"path"`
-	DataDir      string    `json:"data_dir"`
-	LastAccessed time.Time `json:"last_accessed"`
+	Path         string    `json:"path"`          // 项目的工作目录路径
+	DataDir      string    `json:"data_dir"`      // 项目的数据存储目录
+	LastAccessed time.Time `json:"last_accessed"` // 最后访问时间
 }
 
-// ProjectList holds the list of tracked projects.
+// ProjectList 保存所有被跟踪的项目列表。
 type ProjectList struct {
 	Projects []Project `json:"projects"`
 }
 
+// mu 保护文件读写操作的互斥锁。
 var mu sync.Mutex
 
-// projectsFilePath returns the path to the projects.json file.
+// projectsFilePath 返回 projects.json 文件的完整路径。
 func projectsFilePath() string {
 	return filepath.Join(filepath.Dir(config.GlobalConfigData()), projectsFileName)
 }
 
-// Load reads the projects list from disk.
+// Load 从磁盘读取项目列表。
+// 如果文件不存在，返回空列表。
 func Load() (*ProjectList, error) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -54,7 +61,8 @@ func Load() (*ProjectList, error) {
 	return &list, nil
 }
 
-// Save writes the projects list to disk.
+// Save 将项目列表写入磁盘。
+// 自动创建必要的目录结构，文件权限为 0600。
 func Save(list *ProjectList) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -74,7 +82,9 @@ func Save(list *ProjectList) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// Register adds or updates a project in the list.
+// Register 注册或更新项目列表中的项目。
+// 如果项目已存在，更新其数据目录和访问时间；否则添加新项目。
+// 列表按最近访问时间降序排列。
 func Register(workingDir, dataDir string) error {
 	list, err := Load()
 	if err != nil {
@@ -116,7 +126,7 @@ func Register(workingDir, dataDir string) error {
 	return Save(list)
 }
 
-// List returns all tracked projects sorted by last accessed.
+// List 返回所有被跟踪的项目，按最近访问时间降序排列。
 func List() ([]Project, error) {
 	list, err := Load()
 	if err != nil {

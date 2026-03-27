@@ -1,12 +1,10 @@
-// Package shell provides cross-platform shell execution capabilities.
+// Package shell 提供跨平台的 Shell 命令执行能力。
 //
-// This package provides Shell instances for executing commands with their own
-// working directory and environment. Each shell execution is independent.
+// 每个 Shell 实例拥有独立的工作目录和环境变量，每次执行相互独立。
 //
-// WINDOWS COMPATIBILITY:
-// This implementation provides POSIX shell emulation (mvdan.cc/sh/v3) even on
-// Windows. Commands should use forward slashes (/) as path separators to work
-// correctly on all platforms.
+// Windows 兼容性：
+// 使用 mvdan.cc/sh/v3 提供 POSIX Shell 仿真，即使在 Windows 上也能正常工作。
+// 命令中应使用正斜杠 (/) 作为路径分隔符。
 package shell
 
 import (
@@ -27,38 +25,41 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// ShellType represents the type of shell to use
+// ShellType 表示 Shell 的类型。
 type ShellType int
 
 const (
+	// ShellTypePOSIX 表示 POSIX Shell（默认）。
 	ShellTypePOSIX ShellType = iota
+	// ShellTypeCmd 表示 Windows CMD。
 	ShellTypeCmd
+	// ShellTypePowerShell 表示 PowerShell。
 	ShellTypePowerShell
 )
 
-// Logger interface for optional logging
+// Logger 是可选的日志记录接口。
 type Logger interface {
 	InfoPersist(msg string, keysAndValues ...any)
 }
 
-// noopLogger is a logger that does nothing
+// noopLogger 是一个空操作的日志记录器。
 type noopLogger struct{}
 
 func (noopLogger) InfoPersist(msg string, keysAndValues ...any) {}
 
-// BlockFunc is a function that determines if a command should be blocked
+// BlockFunc 是用于判断命令是否应被阻止执行的函数。
 type BlockFunc func(args []string) bool
 
-// Shell provides cross-platform shell execution with optional state persistence
+// Shell 提供跨平台的 Shell 命令执行，支持可选的状态持久化。
 type Shell struct {
-	env        []string
-	cwd        string
-	mu         sync.Mutex
-	logger     Logger
-	blockFuncs []BlockFunc
+	env        []string    // 环境变量列表
+	cwd        string      // 当前工作目录
+	mu         sync.Mutex  // 保护并发访问的互斥锁
+	logger     Logger      // 日志记录器
+	blockFuncs []BlockFunc // 命令阻止函数列表
 }
 
-// Options for creating a new shell
+// Options 是创建 Shell 实例的配置选项。
 type Options struct {
 	WorkingDir string
 	Env        []string
@@ -66,7 +67,9 @@ type Options struct {
 	BlockFuncs []BlockFunc
 }
 
-// NewShell creates a new shell instance with the given options
+// NewShell 创建一个新的 Shell 实例。
+// 如果未指定工作目录，使用当前目录；未指定环境变量，继承父进程环境。
+// 自动添加 CRUSH=1、AGENT=crush、AI_AGENT=crush 环境变量。
 func NewShell(opts *Options) *Shell {
 	if opts == nil {
 		opts = &Options{}
@@ -103,7 +106,7 @@ func NewShell(opts *Options) *Shell {
 	}
 }
 
-// Exec executes a command in the shell
+// Exec 执行 Shell 命令并返回标准输出和标准错误。
 func (s *Shell) Exec(ctx context.Context, command string) (string, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,7 +114,7 @@ func (s *Shell) Exec(ctx context.Context, command string) (string, string, error
 	return s.exec(ctx, command)
 }
 
-// ExecStream executes a command in the shell with streaming output to provided writers
+// ExecStream 执行 Shell 命令并将输出流式写入指定的 Writer。
 func (s *Shell) ExecStream(ctx context.Context, command string, stdout, stderr io.Writer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,19 +122,19 @@ func (s *Shell) ExecStream(ctx context.Context, command string, stdout, stderr i
 	return s.execStream(ctx, command, stdout, stderr)
 }
 
-// GetWorkingDir returns the current working directory
+// GetWorkingDir 返回当前工作目录。
 func (s *Shell) GetWorkingDir() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cwd
 }
 
-// SetWorkingDir sets the working directory
+// SetWorkingDir 设置工作目录，目录不存在时返回错误。
 func (s *Shell) SetWorkingDir(dir string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Verify the directory exists
+	// 验证目录是否存在
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("directory does not exist: %w", err)
 	}
@@ -140,7 +143,7 @@ func (s *Shell) SetWorkingDir(dir string) error {
 	return nil
 }
 
-// GetEnv returns a copy of the environment variables
+// GetEnv 返回环境变量的副本。
 func (s *Shell) GetEnv() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -150,12 +153,12 @@ func (s *Shell) GetEnv() []string {
 	return env
 }
 
-// SetEnv sets an environment variable
+// SetEnv 设置环境变量，已存在则更新，不存在则添加。
 func (s *Shell) SetEnv(key, value string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Update or add the environment variable
+	// 更新或添加环境变量
 	keyPrefix := key + "="
 	for i, env := range s.env {
 		if strings.HasPrefix(env, keyPrefix) {

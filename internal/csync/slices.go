@@ -5,14 +5,13 @@ import (
 	"sync"
 )
 
-// LazySlice is a thread-safe lazy-loaded slice.
+// LazySlice 是线程安全的懒加载切片。
 type LazySlice[K any] struct {
 	inner []K
 	wg    sync.WaitGroup
 }
 
-// NewLazySlice creates a new slice and runs the [load] function in a goroutine
-// to populate it.
+// NewLazySlice 创建懒加载切片，load 函数在后台 goroutine 中执行。
 func NewLazySlice[K any](load func() []K) *LazySlice[K] {
 	s := &LazySlice[K]{}
 	s.wg.Go(func() {
@@ -21,7 +20,7 @@ func NewLazySlice[K any](load func() []K) *LazySlice[K] {
 	return s
 }
 
-// Seq returns an iterator that yields elements from the slice.
+// Seq 返回产生元素的迭代器，加载完成前会阻塞等待。
 func (s *LazySlice[K]) Seq() iter.Seq[K] {
 	s.wg.Wait()
 	return func(yield func(K) bool) {
@@ -33,20 +32,20 @@ func (s *LazySlice[K]) Seq() iter.Seq[K] {
 	}
 }
 
-// Slice is a thread-safe slice implementation that provides concurrent access.
+// Slice 是线程安全的泛型切片实现，基于读写锁提供并发安全访问。
 type Slice[T any] struct {
 	inner []T
 	mu    sync.RWMutex
 }
 
-// NewSlice creates a new thread-safe slice.
+// NewSlice 创建一个新的线程安全切片。
 func NewSlice[T any]() *Slice[T] {
 	return &Slice[T]{
 		inner: make([]T, 0),
 	}
 }
 
-// NewSliceFrom creates a new thread-safe slice from an existing slice.
+// NewSliceFrom 从已有切片创建线程安全切片（深拷贝）。
 func NewSliceFrom[T any](s []T) *Slice[T] {
 	inner := make([]T, len(s))
 	copy(inner, s)
@@ -55,14 +54,14 @@ func NewSliceFrom[T any](s []T) *Slice[T] {
 	}
 }
 
-// Append adds an element to the end of the slice.
+// Append 向切片末尾添加元素。
 func (s *Slice[T]) Append(items ...T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inner = append(s.inner, items...)
 }
 
-// Get returns the element at the specified index.
+// Get 返回指定索引处的元素。
 func (s *Slice[T]) Get(index int) (T, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -73,14 +72,14 @@ func (s *Slice[T]) Get(index int) (T, bool) {
 	return s.inner[index], true
 }
 
-// Len returns the number of elements in the slice.
+// Len 返回切片中的元素数量。
 func (s *Slice[T]) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.inner)
 }
 
-// SetSlice replaces the entire slice with a new one.
+// SetSlice 用新切片替换全部内容（深拷贝）。
 func (s *Slice[T]) SetSlice(items []T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,7 +87,7 @@ func (s *Slice[T]) SetSlice(items []T) {
 	copy(s.inner, items)
 }
 
-// Seq returns an iterator that yields elements from the slice.
+// Seq 返回产生元素的迭代器。
 func (s *Slice[T]) Seq() iter.Seq[T] {
 	return func(yield func(T) bool) {
 		for _, v := range s.Seq2() {
@@ -99,7 +98,7 @@ func (s *Slice[T]) Seq() iter.Seq[T] {
 	}
 }
 
-// Seq2 returns an iterator that yields index-value pairs from the slice.
+// Seq2 返回产生索引-值对的迭代器。
 func (s *Slice[T]) Seq2() iter.Seq2[int, T] {
 	items := s.Copy()
 	return func(yield func(int, T) bool) {
@@ -111,7 +110,7 @@ func (s *Slice[T]) Seq2() iter.Seq2[int, T] {
 	}
 }
 
-// Copy returns a copy of the inner slice.
+// Copy 返回内部切片的副本。
 func (s *Slice[T]) Copy() []T {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

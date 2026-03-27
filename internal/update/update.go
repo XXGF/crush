@@ -1,3 +1,7 @@
+// Package update 提供应用程序版本更新检查功能。
+//
+// 通过 GitHub Releases API 获取最新版本信息，并与当前版本进行比较，
+// 支持稳定版和预发布版的智能判断。
 package update
 
 import (
@@ -12,34 +16,38 @@ import (
 )
 
 const (
+	// githubApiUrl 是 GitHub Releases API 的端点地址。
 	githubApiUrl = "https://api.github.com/repos/charmbracelet/crush/releases/latest"
-	userAgent    = "crush/1.0"
+	// userAgent 是 HTTP 请求中使用的 User-Agent 头。
+	userAgent = "crush/1.0"
 )
 
-// Default is the default [Client].
+// Default 是默认的更新检查客户端，使用 GitHub API。
 var Default Client = &github{}
 
-// Info contains information about an available update.
+// Info 包含版本更新的相关信息。
 type Info struct {
-	Current string
-	Latest  string
-	URL     string
+	Current string // 当前版本号
+	Latest  string // 最新版本号
+	URL     string // 最新版本的下载页面 URL
 }
 
-// Matches a version string like:
-// v0.0.0-0.20251231235959-06c807842604
+// goInstallRegexp 匹配通过 `go install` 安装时生成的版本号格式。
+// 示例：v0.0.0-0.20251231235959-06c807842604
 var goInstallRegexp = regexp.MustCompile(`^v?\d+\.\d+\.\d+-\d+\.\d{14}-[0-9a-f]{12}$`)
 
+// IsDevelopment 判断当前版本是否为开发版本。
+// 开发版本包括："devel"、"unknown"、包含 "dirty" 的版本以及 go install 生成的版本号。
 func (i Info) IsDevelopment() bool {
 	return i.Current == "devel" || i.Current == "unknown" || strings.Contains(i.Current, "dirty") || goInstallRegexp.MatchString(i.Current)
 }
 
-// Available returns true if there's an update available.
+// Available 判断是否有可用的更新版本。
 //
-// If both current and latest are stable versions, returns true if versions are
-// different.
-// If current is a pre-release and latest isn't, returns true.
-// If latest is a pre-release and current isn't, returns false.
+// 判断规则：
+//   - 当前为预发布版且最新为稳定版：返回 true
+//   - 最新为预发布版且当前为稳定版：返回 false
+//   - 其他情况：版本号不同则返回 true
 func (i Info) Available() bool {
 	cpr := strings.Contains(i.Current, "-")
 	lpr := strings.Contains(i.Latest, "-")
@@ -54,7 +62,8 @@ func (i Info) Available() bool {
 	return i.Current != i.Latest
 }
 
-// Check checks if a new version is available.
+// Check 检查是否有新版本可用。
+// 通过指定的 Client 获取最新版本信息，并与当前版本进行比较。
 func Check(ctx context.Context, current string, client Client) (Info, error) {
 	info := Info{
 		Current: current,
@@ -72,20 +81,23 @@ func Check(ctx context.Context, current string, client Client) (Info, error) {
 	return info, nil
 }
 
-// Release represents a GitHub release.
+// Release 表示一个 GitHub 发布版本。
 type Release struct {
-	TagName string `json:"tag_name"`
-	HTMLURL string `json:"html_url"`
+	TagName string `json:"tag_name"` // 版本标签名，如 "v1.0.0"
+	HTMLURL string `json:"html_url"` // 发布页面的 URL
 }
 
-// Client is a client that can get the latest release.
+// Client 定义了获取最新版本信息的客户端接口。
 type Client interface {
+	// Latest 获取最新的发布版本信息。
 	Latest(ctx context.Context) (*Release, error)
 }
 
+// github 是基于 GitHub API 的 Client 实现。
 type github struct{}
 
-// Latest implements [Client].
+// Latest 通过 GitHub Releases API 获取最新的发布版本。
+// 请求超时时间为 30 秒。
 func (c *github) Latest(ctx context.Context) (*Release, error) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,

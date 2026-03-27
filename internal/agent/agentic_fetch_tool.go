@@ -19,13 +19,13 @@ import (
 //go:embed templates/agentic_fetch.md
 var agenticFetchToolDescription []byte
 
-// agenticFetchValidationResult holds the validated parameters from the tool call context.
+// agenticFetchValidationResult 保存工具调用上下文中验证通过的参数。
 type agenticFetchValidationResult struct {
-	SessionID      string
-	AgentMessageID string
+	SessionID      string // 当前会话 ID
+	AgentMessageID string // Agent 消息 ID
 }
 
-// validateAgenticFetchParams validates the tool call parameters and extracts required context values.
+// validateAgenticFetchParams 验证工具调用参数并从上下文中提取必要的值。
 func validateAgenticFetchParams(ctx context.Context, params tools.AgenticFetchParams) (agenticFetchValidationResult, error) {
 	if params.Prompt == "" {
 		return agenticFetchValidationResult{}, errors.New("prompt is required")
@@ -50,6 +50,12 @@ func validateAgenticFetchParams(ctx context.Context, params tools.AgenticFetchPa
 //go:embed templates/agentic_fetch_prompt.md.tpl
 var agenticFetchPromptTmpl []byte
 
+// agenticFetchTool 创建智能网页抓取工具。
+// 支持两种模式：
+//   - URL 模式：获取指定 URL 的内容并分析
+//   - 搜索模式：通过子代理搜索网络并分析结果
+//
+// 大内容会写入临时文件，由子代理使用 view/grep 工具分析。
 func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (fantasy.AgentTool, error) {
 	if client == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -72,7 +78,7 @@ func (c *coordinator) agenticFetchTool(_ context.Context, client *http.Client) (
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
 
-			// Determine description based on mode.
+			// 根据模式生成权限请求描述。
 			var description string
 			if params.URL != "" {
 				description = fmt.Sprintf("Fetch and analyze content from URL: %s", params.URL)

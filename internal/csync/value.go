@@ -5,17 +5,16 @@ import (
 	"sync"
 )
 
-// Value is a generic thread-safe wrapper for any value type.
+// Value 是线程安全的泛型值包装器。
 //
-// For slices, use [Slice]. For maps, use [Map]. Pointers are not supported.
+// 对于切片请使用 [Slice]，对于 map 请使用 [Map]。不支持指针类型。
 type Value[T any] struct {
 	v  T
 	mu sync.RWMutex
 }
 
-// NewValue creates a new Value with the given initial value.
-//
-// Panics if t is a pointer, slice, or map. Use the dedicated types for those.
+// NewValue 创建一个新的线程安全值包装器。
+// 如果传入指针、切片或 map 类型会 panic。
 func NewValue[T any](t T) *Value[T] {
 	v := reflect.ValueOf(t)
 	switch v.Kind() {
@@ -29,14 +28,14 @@ func NewValue[T any](t T) *Value[T] {
 	return &Value[T]{v: t}
 }
 
-// Get returns the current value.
+// Get 返回当前值。
 func (v *Value[T]) Get() T {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return v.v
 }
 
-// Set updates the value.
+// Set 更新值。
 func (v *Value[T]) Set(t T) {
 	v.mu.Lock()
 	defer v.mu.Unlock()

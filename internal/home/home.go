@@ -1,4 +1,6 @@
-// Package home provides utilities for dealing with the user's home directory.
+// Package home 提供用户主目录的工具函数。
+//
+// 支持将绝对路径与主目录之间进行缩写转换（~ 符号）。
 package home
 
 import (
@@ -8,20 +10,24 @@ import (
 	"strings"
 )
 
+// homedir 缓存用户主目录路径，在包初始化时加载。
 var homedir, homedirErr = os.UserHomeDir()
 
 func init() {
 	if homedirErr != nil {
-		slog.Error("Failed to get user home directory", "error", homedirErr)
+		slog.Error("获取用户主目录失败", "error", homedirErr)
 	}
 }
 
-// Dir returns the user home directory.
+// Dir 返回用户主目录的绝对路径。
+// 如果获取失败则返回空字符串。
 func Dir() string {
 	return homedir
 }
 
-// Short replaces the actual home path from [Dir] with `~`.
+// Short 将路径中的主目录前缀替换为 "~" 符号。
+// 例如：/Users/foo/bar → ~/bar。
+// 如果路径不以主目录开头，则原样返回。
 func Short(p string) string {
 	if homedir == "" || !strings.HasPrefix(p, homedir) {
 		return p
@@ -29,7 +35,9 @@ func Short(p string) string {
 	return filepath.Join("~", strings.TrimPrefix(p, homedir))
 }
 
-// Long replaces the `~` with actual home path from [Dir].
+// Long 将路径中的 "~" 符号展开为实际的主目录路径。
+// 例如：~/bar → /Users/foo/bar。
+// 如果路径不以 "~" 开头，则原样返回。
 func Long(p string) string {
 	if homedir == "" || !strings.HasPrefix(p, "~") {
 		return p

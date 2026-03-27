@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// NewHTTPClient creates an HTTP client with debug logging enabled when debug mode is on.
+// NewHTTPClient 创建一个带请求/响应日志记录功能的 HTTP 客户端。
+// 在 Debug 日志级别下会记录完整的请求和响应体。
 func NewHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: &HTTPRoundTripLogger{
@@ -19,12 +20,14 @@ func NewHTTPClient() *http.Client {
 	}
 }
 
-// HTTPRoundTripLogger is an http.RoundTripper that logs requests and responses.
+// HTTPRoundTripLogger 是一个带日志记录功能的 HTTP 传输层。
+// 记录每个 HTTP 请求的方法、URL、状态码、耗时等信息。
 type HTTPRoundTripLogger struct {
-	Transport http.RoundTripper
+	Transport http.RoundTripper // 底层的 HTTP 传输层
 }
 
-// RoundTrip implements http.RoundTripper interface with logging.
+// RoundTrip 实现 http.RoundTripper 接口，在执行 HTTP 请求前后记录日志。
+// Debug 级别下会记录完整的请求体和响应体，并自动格式化 JSON。
 func (h *HTTPRoundTripLogger) RoundTrip(req *http.Request) (*http.Response, error) {
 	var err error
 	var save io.ReadCloser
@@ -81,6 +84,7 @@ func (h *HTTPRoundTripLogger) RoundTrip(req *http.Request) (*http.Response, erro
 	return resp, nil
 }
 
+// bodyToString 将 HTTP 请求/响应体转换为字符串，如果是 JSON 则自动格式化。
 func bodyToString(body io.ReadCloser) string {
 	if body == nil {
 		return ""
@@ -98,7 +102,8 @@ func bodyToString(body io.ReadCloser) string {
 	return b.String()
 }
 
-// formatHeaders formats HTTP headers for logging, filtering out sensitive information.
+// formatHeaders 格式化 HTTP 头用于日志输出，自动过滤敏感头信息。
+// 包含 authorization、api-key、token、secret 的头会被替换为 [REDACTED]。
 func formatHeaders(headers http.Header) map[string][]string {
 	filtered := make(map[string][]string)
 	for key, values := range headers {
@@ -116,6 +121,8 @@ func formatHeaders(headers http.Header) map[string][]string {
 	return filtered
 }
 
+// drainBody 读取并复制 HTTP 请求/响应体，返回两个独立的可读副本。
+// 这允许在记录日志后仍能正常读取原始数据。
 func drainBody(b io.ReadCloser) (r1, r2 io.ReadCloser, err error) {
 	if b == nil || b == http.NoBody {
 		return http.NoBody, http.NoBody, nil
