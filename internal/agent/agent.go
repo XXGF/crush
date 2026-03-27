@@ -47,93 +47,139 @@ import (
 )
 
 const (
+	// DefaultSessionName 是新建会话时的默认标题，在标题生成失败时使用。
 	DefaultSessionName = "Untitled Session"
 
-	// Constants for auto-summarization thresholds
-	largeContextWindowThreshold = 200_000
-	largeContextWindowBuffer    = 20_000
-	smallContextWindowRatio     = 0.2
+	// 自动摘要触发阈值相关常量。
+	// 当上下文窗口使用量接近阈值时，Agent 会自动触发会话摘要以释放上下文空间。
+	largeContextWindowThreshold = 200_000 // 大上下文窗口的判定阈值（Token 数）
+	largeContextWindowBuffer    = 20_000  // 大上下文窗口模式下的剩余缓冲区大小
+	smallContextWindowRatio     = 0.2     // 小上下文窗口模式下的剩余比例阈值
 )
 
+// userAgent 是发送 HTTP 请求时使用的 User-Agent 标识字符串。
 var userAgent = fmt.Sprintf("Charm-Crush/%s (https://charm.land/crush)", version.Version)
 
+// titlePrompt 是用于生成会话标题的提示词模板。
+//
 //go:embed templates/title.md
 var titlePrompt []byte
 
+// summaryPrompt 是用于生成会话摘要的提示词模板。
+//
 //go:embed templates/summary.md
 var summaryPrompt []byte
 
-// Used to remove <think> tags from generated titles.
+// thinkTagRegex 用于从生成的标题中移除 <think> 标签及其内容。
+// 部分模型会在输出中包含思考过程标签，需要清理后才能作为标题使用。
 var thinkTagRegex = regexp.MustCompile(`<think>.*?</think>`)
 
+// SessionAgentCall 封装了向 Agent 发起一次调用所需的全部参数。
+// 包括会话标识、用户提示词、模型参数配置以及附件等信息。
 type SessionAgentCall struct {
-	SessionID        string
-	Prompt           string
-	ProviderOptions  fantasy.ProviderOptions
-	Attachments      []message.Attachment
-	MaxOutputTokens  int64
-	Temperature      *float64
-	TopP             *float64
-	TopK             *int64
-	FrequencyPenalty *float64
-	PresencePenalty  *float64
-	NonInteractive   bool
+	SessionID        string                 // 目标会话的唯一标识
+	Prompt           string                 // 用户输入的提示词文本
+	ProviderOptions  fantasy.ProviderOptions // 提供商特定的选项（如 Anthropic 缓存控制）
+	Attachments      []message.Attachment    // 用户附带的文件附件（图片、文档等）
+	MaxOutputTokens  int64                  // 最大输出 Token 数限制
+	Temperature      *float64               // 温度参数，控制输出随机性
+	TopP             *float64               // Top-P 采样参数
+	TopK             *int64                 // Top-K 采样参数
+	FrequencyPenalty *float64               // 频率惩罚参数
+	PresencePenalty  *float64               // 存在惩罚参数
+	NonInteractive   bool                   // 是否为非交互模式（子代理调用时为 true）
 }
 
+// SessionAgent 定义了会话级 AI 代理的核心接口。
+//
+// 它负责管理单个 Agent 实例的生命周期，包括：
+//   - 执行用户请求（Run）
+//   - 模型和工具的动态更新（SetModels、SetTools）
+//   - 会话状态管理（Cancel、IsSessionBusy、IsBusy）
+//   - 消息队列管理（QueuedPrompts、ClearQueue）
+//   - 上下文摘要（Summarize）
+//
+// 当会话正忙时，新的请求会被自动排队，待当前请求完成后依次处理。
 type SessionAgent interface {
+	// Run 执行一次 Agent 调用。如果会话正忙，请求会被排队等待。
+	// 返回 nil result 表示请求已入队，将在后续自动执行。
 	Run(context.Context, SessionAgentCall) (*fantasy.AgentResult, error)
+	// SetModels 动态更新 Agent 使用的大模型和小模型。
 	SetModels(large Model, small Model)
+	// SetTools 动态更新 Agent 可用的工具列表。
 	SetTools(tools []fantasy.AgentTool)
+	// SetSystemPrompt 动态更新 Agent 的系统提示词。
 	SetSystemPrompt(systemPrompt string)
+	// Cancel 取消指定会话的当前请求和排队的请求。
 	Cancel(sessionID string)
+	// CancelAll 取消所有活跃会话的请求。
 	CancelAll()
+	// IsSessionBusy 检查指定会话是否正在处理请求。
 	IsSessionBusy(sessionID string) bool
+	// IsBusy 检查是否有任何会话正在处理请求。
 	IsBusy() bool
+	// QueuedPrompts 返回指定会话中排队等待的请求数量。
 	QueuedPrompts(sessionID string) int
+	// QueuedPromptsList 返回指定会话中排队等待的提示词列表。
 	QueuedPromptsList(sessionID string) []string
+	// ClearQueue 清空指定会话的消息队列。
 	ClearQueue(sessionID string)
+	// Summarize 对指定会话的历史消息进行摘要压缩，释放上下文空间。
 	Summarize(context.Context, string, fantasy.ProviderOptions) error
+	// Model 返回当前使用的大模型配置。
 	Model() Model
 }
 
+// Model 封装了一个语言模型的完整配置信息。
+// 包含运行时模型实例、Catwalk 元数据配置和用户选择的模型配置。
 type Model struct {
-	Model      fantasy.LanguageModel
-	CatwalkCfg catwalk.Model
-	ModelCfg   config.SelectedModel
+	Model      fantasy.LanguageModel  // 运行时语言模型实例，用于实际的 API 调用
+	CatwalkCfg catwalk.Model          // Catwalk 模型元数据（上下文窗口、费用、能力等）
+	ModelCfg   config.SelectedModel   // 用户选择的模型配置（提供商、模型 ID、参数等）
 }
 
+// sessionAgent 是 SessionAgent 接口的具体实现。
+//
+// 它通过并发安全的数据结构管理模型、工具和会话状态，
+// 支持在运行时动态切换模型和更新工具列表。
+// 使用消息队列机制确保同一会话的请求按序执行。
 type sessionAgent struct {
-	largeModel         *csync.Value[Model]
-	smallModel         *csync.Value[Model]
-	systemPromptPrefix *csync.Value[string]
-	systemPrompt       *csync.Value[string]
-	tools              *csync.Slice[fantasy.AgentTool]
+	largeModel         *csync.Value[Model]              // 主模型（用于对话和工具调用）
+	smallModel         *csync.Value[Model]              // 辅助模型（用于标题生成等轻量任务）
+	systemPromptPrefix *csync.Value[string]             // 系统提示词前缀（提供商级别）
+	systemPrompt       *csync.Value[string]             // 系统提示词主体
+	tools              *csync.Slice[fantasy.AgentTool]  // 可用工具列表
 
-	isSubAgent           bool
-	sessions             session.Service
-	messages             message.Service
-	disableAutoSummarize bool
-	isYolo               bool
-	notify               pubsub.Publisher[notify.Notification]
+	isSubAgent           bool                                       // 是否为子代理（影响提示词构建和通知行为）
+	sessions             session.Service                             // 会话持久化服务
+	messages             message.Service                             // 消息持久化服务
+	disableAutoSummarize bool                                       // 是否禁用自动摘要功能
+	isYolo               bool                                       // YOLO 模式：跳过所有工具权限确认
+	notify               pubsub.Publisher[notify.Notification]      // 桌面通知发布器
 
-	messageQueue   *csync.Map[string, []SessionAgentCall]
-	activeRequests *csync.Map[string, context.CancelFunc]
+	messageQueue   *csync.Map[string, []SessionAgentCall]  // 按会话 ID 分组的待处理请求队列
+	activeRequests *csync.Map[string, context.CancelFunc]  // 按会话 ID 索引的活跃请求取消函数
 }
 
+// SessionAgentOptions 是创建 SessionAgent 实例时的配置选项。
 type SessionAgentOptions struct {
-	LargeModel           Model
-	SmallModel           Model
-	SystemPromptPrefix   string
-	SystemPrompt         string
-	IsSubAgent           bool
-	DisableAutoSummarize bool
-	IsYolo               bool
-	Sessions             session.Service
-	Messages             message.Service
-	Tools                []fantasy.AgentTool
-	Notify               pubsub.Publisher[notify.Notification]
+	LargeModel           Model                                // 主模型配置
+	SmallModel           Model                                // 辅助模型配置
+	SystemPromptPrefix   string                               // 系统提示词前缀
+	SystemPrompt         string                               // 系统提示词主体
+	IsSubAgent           bool                                 // 是否为子代理
+	DisableAutoSummarize bool                                 // 是否禁用自动摘要
+	IsYolo               bool                                 // 是否启用 YOLO 模式
+	Sessions             session.Service                      // 会话服务
+	Messages             message.Service                      // 消息服务
+	Tools                []fantasy.AgentTool                  // 初始工具列表
+	Notify               pubsub.Publisher[notify.Notification] // 通知发布器
 }
 
+// NewSessionAgent 创建并返回一个新的 SessionAgent 实例。
+//
+// 所有可变字段（模型、工具、提示词）都通过并发安全的包装器存储，
+// 支持在 Agent 运行期间通过 Set* 方法动态更新。
 func NewSessionAgent(
 	opts SessionAgentOptions,
 ) SessionAgent {
@@ -154,6 +200,22 @@ func NewSessionAgent(
 	}
 }
 
+// Run 执行一次完整的 Agent 对话循环。
+//
+// 核心流程：
+//  1. 参数校验（提示词非空、会话 ID 存在）
+//  2. 如果会话正忙，将请求加入队列并返回 nil
+//  3. 构建 Agent 实例（模型 + 系统提示词 + 工具）
+//  4. 获取会话历史消息
+//  5. 异步生成会话标题（首条消息时）
+//  6. 创建用户消息并持久化
+//  7. 通过流式调用 LLM，处理推理、文本、工具调用等事件
+//  8. 检测循环调用和上下文溢出，必要时触发自动摘要
+//  9. 处理队列中的后续请求
+//
+// 返回值：
+//   - *fantasy.AgentResult: Agent 执行结果，包含最终响应和使用量统计
+//   - error: 执行过程中的错误（用户取消、权限拒绝、提供商错误等）
 func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy.AgentResult, error) {
 	if call.Prompt == "" && !message.ContainsTextAttachment(call.Attachments) {
 		return nil, ErrEmptyPrompt
@@ -590,6 +652,14 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy
 	return a.Run(ctx, firstQueuedMessage)
 }
 
+// Summarize 对指定会话的历史消息进行摘要压缩。
+//
+// 当上下文窗口使用量接近阈值时，该方法会被自动调用。
+// 它使用大模型生成一条摘要消息，替代之前的所有历史消息，
+// 从而释放上下文空间，使对话可以继续进行。
+//
+// 如果会话包含 TODO 列表，摘要中会包含任务状态信息。
+// 用户取消操作时，会清理已创建的摘要消息。
 func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fantasy.ProviderOptions) error {
 	if a.IsSessionBusy(sessionID) {
 		return ErrSessionBusy
@@ -704,6 +774,11 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	return err
 }
 
+// getCacheControlOptions 返回 Anthropic 系列提供商的缓存控制选项。
+//
+// 为 Anthropic、Bedrock 和 Vercel 提供商设置 "ephemeral" 缓存策略，
+// 以优化重复请求的 Token 消耗和响应速度。
+// 可通过 CRUSH_DISABLE_ANTHROPIC_CACHE 环境变量禁用。
 func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {
 	if t, _ := strconv.ParseBool(os.Getenv("CRUSH_DISABLE_ANTHROPIC_CACHE")); t {
 		return fantasy.ProviderOptions{}
@@ -721,6 +796,8 @@ func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {
 	}
 }
 
+// createUserMessage 创建并持久化一条用户消息。
+// 将用户的文本提示词和二进制附件（图片等）组合为消息内容部分。
 func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentCall) (message.Message, error) {
 	parts := []message.ContentPart{message.TextContent{Text: call.Prompt}}
 	var attachmentParts []message.ContentPart
@@ -738,6 +815,11 @@ func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentC
 	return msg, nil
 }
 
+// preparePrompt 将持久化的消息列表转换为 LLM 可理解的消息格式。
+//
+// 对于非子代理，会在消息开头插入一条系统提醒（关于 TODO 列表状态）。
+// 同时将非文本附件（如图片）提取为独立的文件部分。
+// 空消息和无内容的助手消息会被过滤掉。
 func (a *sessionAgent) preparePrompt(msgs []message.Message, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart) {
 	var history []fantasy.Message
 	if !a.isSubAgent {
@@ -776,6 +858,10 @@ If not, please feel free to ignore. Again do not mention this message to the use
 	return history, files
 }
 
+// getSessionMessages 获取指定会话的消息列表。
+//
+// 如果会话存在摘要消息（SummaryMessageID），则只返回摘要消息及其之后的消息，
+// 并将摘要消息的角色改为 User，以便 LLM 将其作为上下文理解。
 func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.Session) ([]message.Message, error) {
 	msgs, err := a.messages.List(ctx, session.ID)
 	if err != nil {
@@ -918,6 +1004,9 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, user
 	}
 }
 
+// openrouterCost 从提供商元数据中提取 OpenRouter 的实际费用。
+// OpenRouter 会在响应元数据中返回精确的费用信息，优先于本地计算的估算值。
+// 如果元数据中不包含 OpenRouter 信息，返回 nil。
 func (a *sessionAgent) openrouterCost(metadata fantasy.ProviderMetadata) *float64 {
 	openrouterMetadata, ok := metadata[openrouter.Name]
 	if !ok {
@@ -931,6 +1020,15 @@ func (a *sessionAgent) openrouterCost(metadata fantasy.ProviderMetadata) *float6
 	return &opts.Usage.Cost
 }
 
+// updateSessionUsage 更新会话的 Token 使用量和费用统计。
+//
+// 费用计算基于 Catwalk 模型配置中的单价信息，分别计算：
+//   - 缓存创建 Token 费用
+//   - 缓存读取 Token 费用
+//   - 输入 Token 费用
+//   - 输出 Token 费用
+//
+// 如果提供了 overrideCost（如 OpenRouter 返回的实际费用），则使用该值替代计算值。
 func (a *sessionAgent) updateSessionUsage(model Model, session *session.Session, usage fantasy.Usage, overrideCost *float64) {
 	modelConfig := model.CatwalkCfg
 	cost := modelConfig.CostPer1MInCached/1e6*float64(usage.CacheCreationTokens) +
@@ -950,6 +1048,11 @@ func (a *sessionAgent) updateSessionUsage(model Model, session *session.Session,
 	session.PromptTokens = usage.InputTokens + usage.CacheReadTokens
 }
 
+// Cancel 取消指定会话的当前请求。
+//
+// 注意：不使用 Take() 移除 activeRequests 条目，因为需要保持 IsBusy() 返回 true，
+// 直到 goroutine 完全完成（包括可能访问数据库的错误处理）。
+// 同时会取消该会话的摘要请求和清空消息队列。
 func (a *sessionAgent) Cancel(sessionID string) {
 	// Cancel regular requests. Don't use Take() here - we need the entry to
 	// remain in activeRequests so IsBusy() returns true until the goroutine
@@ -972,6 +1075,7 @@ func (a *sessionAgent) Cancel(sessionID string) {
 	}
 }
 
+// ClearQueue 清空指定会话的消息队列，丢弃所有排队等待的请求。
 func (a *sessionAgent) ClearQueue(sessionID string) {
 	if a.QueuedPrompts(sessionID) > 0 {
 		slog.Debug("Clearing queued prompts", "session_id", sessionID)
@@ -979,6 +1083,8 @@ func (a *sessionAgent) ClearQueue(sessionID string) {
 	}
 }
 
+// CancelAll 取消所有活跃会话的请求。
+// 发送取消信号后，最多等待 5 秒确认所有请求已完成。
 func (a *sessionAgent) CancelAll() {
 	if !a.IsBusy() {
 		return
@@ -998,6 +1104,7 @@ func (a *sessionAgent) CancelAll() {
 	}
 }
 
+// IsBusy 检查是否有任何会话正在处理请求。
 func (a *sessionAgent) IsBusy() bool {
 	var busy bool
 	for cancelFunc := range a.activeRequests.Seq() {
@@ -1009,11 +1116,13 @@ func (a *sessionAgent) IsBusy() bool {
 	return busy
 }
 
+// IsSessionBusy 检查指定会话是否正在处理请求。
 func (a *sessionAgent) IsSessionBusy(sessionID string) bool {
 	_, busy := a.activeRequests.Get(sessionID)
 	return busy
 }
 
+// QueuedPrompts 返回指定会话中排队等待处理的请求数量。
 func (a *sessionAgent) QueuedPrompts(sessionID string) int {
 	l, ok := a.messageQueue.Get(sessionID)
 	if !ok {
@@ -1022,6 +1131,7 @@ func (a *sessionAgent) QueuedPrompts(sessionID string) int {
 	return len(l)
 }
 
+// QueuedPromptsList 返回指定会话中排队等待的提示词文本列表。
 func (a *sessionAgent) QueuedPromptsList(sessionID string) []string {
 	l, ok := a.messageQueue.Get(sessionID)
 	if !ok {
@@ -1034,19 +1144,26 @@ func (a *sessionAgent) QueuedPromptsList(sessionID string) []string {
 	return prompts
 }
 
+// SetModels 动态更新 Agent 使用的大模型和小模型。
+// 该方法是并发安全的，可在 Agent 运行期间调用。
 func (a *sessionAgent) SetModels(large Model, small Model) {
 	a.largeModel.Set(large)
 	a.smallModel.Set(small)
 }
 
+// SetTools 动态更新 Agent 可用的工具列表。
+// 该方法是并发安全的，新工具会在下一个 PrepareStep 回调中生效。
 func (a *sessionAgent) SetTools(tools []fantasy.AgentTool) {
 	a.tools.SetSlice(tools)
 }
 
+// SetSystemPrompt 动态更新 Agent 的系统提示词。
+// 该方法是并发安全的。
 func (a *sessionAgent) SetSystemPrompt(systemPrompt string) {
 	a.systemPrompt.Set(systemPrompt)
 }
 
+// Model 返回当前使用的大模型配置信息。
 func (a *sessionAgent) Model() Model {
 	return a.largeModel.Get()
 }

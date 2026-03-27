@@ -45,50 +45,88 @@ import (
 	"github.com/qjebbs/go-jsons"
 )
 
-// Coordinator errors.
+// Coordinator 错误定义。
+// 这些错误用于标识协调器初始化和模型构建过程中的各类配置问题。
 var (
-	errCoderAgentNotConfigured         = errors.New("coder agent not configured")
-	errModelProviderNotConfigured      = errors.New("model provider not configured")
-	errLargeModelNotSelected           = errors.New("large model not selected")
-	errSmallModelNotSelected           = errors.New("small model not selected")
-	errLargeModelProviderNotConfigured = errors.New("large model provider not configured")
-	errSmallModelProviderNotConfigured = errors.New("small model provider not configured")
-	errLargeModelNotFound              = errors.New("large model not found in provider config")
-	errSmallModelNotFound              = errors.New("small model not found in provider config")
+	errCoderAgentNotConfigured         = errors.New("coder agent not configured")          // 编码代理未配置
+	errModelProviderNotConfigured      = errors.New("model provider not configured")       // 模型提供商未配置
+	errLargeModelNotSelected           = errors.New("large model not selected")            // 未选择大模型
+	errSmallModelNotSelected           = errors.New("small model not selected")            // 未选择小模型
+	errLargeModelProviderNotConfigured = errors.New("large model provider not configured") // 大模型提供商未配置
+	errSmallModelProviderNotConfigured = errors.New("small model provider not configured") // 小模型提供商未配置
+	errLargeModelNotFound              = errors.New("large model not found in provider config") // 在提供商配置中找不到大模型
+	errSmallModelNotFound              = errors.New("small model not found in provider config") // 在提供商配置中找不到小模型
 )
 
+// Coordinator 定义了 Agent 协调器的核心接口。
+//
+// 协调器是 Agent 系统的顶层编排器，负责：
+//   - 管理 Agent 实例的创建和配置
+//   - 协调模型、工具和提供商的构建
+//   - 处理 OAuth 令牌刷新和 API Key 更新
+//   - 封装会话级别的操作（运行、取消、摘要等）
 type Coordinator interface {
-	// INFO: (kujtim) this is not used yet we will use this when we have multiple agents
-	// SetMainAgent(string)
+	// Run 在指定会话中执行一次 Agent 调用。
+	// 会自动刷新模型配置、处理附件过滤和 OAuth 重试。
 	Run(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error)
+	// Cancel 取消指定会话的当前请求。
 	Cancel(sessionID string)
+	// CancelAll 取消所有活跃会话的请求。
 	CancelAll()
+	// IsSessionBusy 检查指定会话是否正在处理请求。
 	IsSessionBusy(sessionID string) bool
+	// IsBusy 检查是否有任何会话正在处理请求。
 	IsBusy() bool
+	// QueuedPrompts 返回指定会话中排队等待的请求数量。
 	QueuedPrompts(sessionID string) int
+	// QueuedPromptsList 返回指定会话中排队等待的提示词列表。
 	QueuedPromptsList(sessionID string) []string
+	// ClearQueue 清空指定会话的消息队列。
 	ClearQueue(sessionID string)
+	// Summarize 对指定会话进行摘要压缩。
 	Summarize(context.Context, string) error
+	// Model 返回当前使用的模型配置。
 	Model() Model
+	// UpdateModels 重新构建并更新 Agent 的模型和工具配置。
 	UpdateModels(ctx context.Context) error
 }
 
+// coordinator 是 Coordinator 接口的具体实现。
+//
+// 它持有所有必要的服务依赖，并管理 Agent 实例的生命周期。
+// readyWg 用于等待异步初始化任务（系统提示词构建、工具加载）完成。
 type coordinator struct {
-	cfg         *config.ConfigStore
-	sessions    session.Service
-	messages    message.Service
-	permissions permission.Service
-	history     history.Service
-	filetracker filetracker.Service
-	lspManager  *lsp.Manager
-	notify      pubsub.Publisher[notify.Notification]
+	cfg         *config.ConfigStore        // 全局配置存储
+	sessions    session.Service             // 会话持久化服务
+	messages    message.Service             // 消息持久化服务
+	permissions permission.Service          // 工具权限管理服务
+	history     history.Service             // 文件历史记录服务
+	filetracker filetracker.Service         // 文件跟踪服务
+	lspManager  *lsp.Manager                // LSP 服务管理器
+	notify      pubsub.Publisher[notify.Notification] // 桌面通知发布器
 
-	currentAgent SessionAgent
-	agents       map[string]SessionAgent
+	currentAgent SessionAgent               // 当前活跃的 Agent 实例
+	agents       map[string]SessionAgent     // 按名称索引的 Agent 实例映射
 
-	readyWg errgroup.Group
+	readyWg errgroup.Group                  // 异步初始化任务的等待组
 }
 
+// NewCoordinator 创建并初始化一个新的 Agent 协调器。
+//
+// 初始化过程包括：
+//  1. 从配置中加载编码代理（Coder Agent）的配置
+//  2. 构建系统提示词
+//  3. 异步加载工具集和系统提示词（通过 readyWg 等待完成）
+//
+// 参数说明：
+//   - cfg: 全局配置存储，包含提供商、模型、工具等配置
+//   - sessions: 会话持久化服务
+//   - messages: 消息持久化服务
+//   - permissions: 工具执行权限管理服务
+//   - history: 文件编辑历史服务
+//   - filetracker: 文件跟踪服务
+//   - lspManager: LSP 服务管理器
+//   - notify: 桌面通知发布器
 func NewCoordinator(
 	ctx context.Context,
 	cfg *config.ConfigStore,
@@ -132,7 +170,19 @@ func NewCoordinator(
 	return c, nil
 }
 
-// Run implements Coordinator.
+// Run 在指定会话中执行一次 Agent 调用。
+//
+// 执行流程：
+//  1. 等待异步初始化完成
+//  2. 刷新模型配置
+//  3. 过滤不支持图片的模型的图片附件
+//  4. 合并提供商选项和模型参数
+//  5. 刷新过期的 OAuth 令牌
+//  6. 执行 Agent 调用，如遇 401 错误则自动重试
+//
+// 支持的自动重试场景：
+//   - OAuth 令牌过期：自动刷新令牌后重试
+//   - API Key 模板变量更新：重新解析模板后重试
 func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
 	if err := c.readyWg.Wait(); err != nil {
 		return nil, err
@@ -212,6 +262,15 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 	return result, originalErr
 }
 
+// getProviderOptions 根据模型配置和提供商配置构建提供商特定的调用选项。
+//
+// 选项合并优先级（从低到高）：
+//  1. Catwalk 模型元数据中的选项
+//  2. 提供商配置中的选项
+//  3. 用户模型配置中的选项
+//
+// 根据提供商类型（OpenAI、Anthropic、Google 等）解析为对应的特定选项结构。
+// 对于 Hyper 提供商，会根据模型 ID 自动推断实际的提供商类型。
 func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.ProviderOptions {
 	options := fantasy.ProviderOptions{}
 
@@ -367,6 +426,9 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 	return options
 }
 
+// mergeCallOptions 合并模型和提供商的调用参数。
+// 返回合并后的提供商选项以及各项采样参数（温度、TopP、TopK、频率惩罚、存在惩罚）。
+// 用户配置优先于 Catwalk 默认值。
 func mergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderOptions, *float64, *float64, *int64, *float64, *float64) {
 	modelOptions := getProviderOptions(model, cfg)
 	temp := cmp.Or(model.ModelCfg.Temperature, model.CatwalkCfg.Options.Temperature)
@@ -377,6 +439,15 @@ func mergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderO
 	return modelOptions, temp, topP, topK, freqPenalty, presPenalty
 }
 
+// buildAgent 构建一个完整的 SessionAgent 实例。
+//
+// 构建过程：
+//  1. 构建大小模型对
+//  2. 创建 SessionAgent 实例
+//  3. 异步构建系统提示词（通过 readyWg）
+//  4. 异步构建工具集（通过 readyWg）
+//
+// isSubAgent 参数影响工具集和提示词的构建方式。
 func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent, isSubAgent bool) (SessionAgent, error) {
 	large, small, err := c.buildAgentModels(ctx, isSubAgent)
 	if err != nil {
@@ -419,6 +490,16 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	return result, nil
 }
 
+// buildTools 根据 Agent 配置构建可用的工具列表。
+//
+// 工具构建流程：
+//  1. 根据配置添加子代理工具和网页抓取工具
+//  2. 添加所有内置工具（bash、edit、view、grep 等）
+//  3. 根据配置添加 LSP 工具（诊断、引用查找、重启）
+//  4. 添加 MCP 资源工具
+//  5. 根据 Agent 的 AllowedTools 配置过滤工具
+//  6. 添加并过滤 MCP 工具
+//  7. 按名称字母序排序
 func (c *coordinator) buildTools(ctx context.Context, agent config.Agent) ([]fantasy.AgentTool, error) {
 	var allTools []fantasy.AgentTool
 	if slices.Contains(agent.AllowedTools, AgentToolName) {
@@ -511,7 +592,12 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent) ([]fan
 	return filteredTools, nil
 }
 
-// TODO: when we support multiple agents we need to change this so that we pass in the agent specific model config
+// buildAgentModels 构建 Agent 所需的大小模型对。
+//
+// 从配置中读取模型选择，构建对应的提供商实例，并创建语言模型对象。
+// 对于 OpenRouter 提供商，支持的模型会自动添加 ":exacto" 后缀。
+//
+// TODO: 当支持多 Agent 时，需要传入 Agent 特定的模型配置。
 func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Model, Model, error) {
 	largeModelCfg, ok := c.cfg.Config().Models[config.SelectedModelTypeLarge]
 	if !ok {
@@ -595,6 +681,8 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 		}, nil
 }
 
+// buildAnthropicProvider 构建 Anthropic 提供商实例。
+// 支持 Bearer Token、MiniMax 特殊认证和标准 X-Api-Key 认证方式。
 func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
 	var opts []anthropic.Option
 
@@ -627,6 +715,8 @@ func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map
 	return anthropic.New(opts...)
 }
 
+// buildOpenaiProvider 构建 OpenAI 提供商实例。
+// 默认启用 Responses API。
 func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[string]string) (fantasy.Provider, error) {
 	opts := []openai.Option{
 		openai.WithAPIKey(apiKey),
@@ -645,6 +735,7 @@ func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[st
 	return openai.New(opts...)
 }
 
+// buildOpenrouterProvider 构建 OpenRouter 提供商实例。
 func (c *coordinator) buildOpenrouterProvider(_, apiKey string, headers map[string]string) (fantasy.Provider, error) {
 	opts := []openrouter.Option{
 		openrouter.WithAPIKey(apiKey),
@@ -659,6 +750,7 @@ func (c *coordinator) buildOpenrouterProvider(_, apiKey string, headers map[stri
 	return openrouter.New(opts...)
 }
 
+// buildVercelProvider 构建 Vercel AI Gateway 提供商实例。
 func (c *coordinator) buildVercelProvider(_, apiKey string, headers map[string]string) (fantasy.Provider, error) {
 	opts := []vercel.Option{
 		vercel.WithAPIKey(apiKey),
@@ -673,6 +765,9 @@ func (c *coordinator) buildVercelProvider(_, apiKey string, headers map[string]s
 	return vercel.New(opts...)
 }
 
+// buildOpenaiCompatProvider 构建 OpenAI 兼容提供商实例。
+// 用于 Deepseek、Groq、Copilot 等使用 OpenAI 兼容 API 的提供商。
+// 对于 Copilot 提供商，会使用专用的 HTTP 客户端并启用 Responses API。
 func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers map[string]string, extraBody map[string]any, providerID string, isSubAgent bool) (fantasy.Provider, error) {
 	opts := []openaicompat.Option{
 		openaicompat.WithBaseURL(baseURL),
@@ -702,6 +797,8 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 	return openaicompat.New(opts...)
 }
 
+// buildAzureProvider 构建 Azure OpenAI 提供商实例。
+// 支持通过 options["apiVersion"] 指定 API 版本。
 func (c *coordinator) buildAzureProvider(baseURL, apiKey string, headers map[string]string, options map[string]string) (fantasy.Provider, error) {
 	opts := []azure.Option{
 		azure.WithBaseURL(baseURL),
@@ -725,6 +822,8 @@ func (c *coordinator) buildAzureProvider(baseURL, apiKey string, headers map[str
 	return azure.New(opts...)
 }
 
+// buildBedrockProvider 构建 Amazon Bedrock 提供商实例。
+// 支持通过 API Key、AWS_BEARER_TOKEN_BEDROCK 环境变量或 AWS SDK 默认认证。
 func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]string) (fantasy.Provider, error) {
 	var opts []bedrock.Option
 	if c.cfg.Config().Options.Debug {
@@ -745,6 +844,7 @@ func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]str
 	return bedrock.New(opts...)
 }
 
+// buildGoogleProvider 构建 Google Gemini API 提供商实例。
 func (c *coordinator) buildGoogleProvider(baseURL, apiKey string, headers map[string]string) (fantasy.Provider, error) {
 	opts := []google.Option{
 		google.WithBaseURL(baseURL),
@@ -760,6 +860,8 @@ func (c *coordinator) buildGoogleProvider(baseURL, apiKey string, headers map[st
 	return google.New(opts...)
 }
 
+// buildGoogleVertexProvider 构建 Google Cloud Vertex AI 提供商实例。
+// 需要通过 options 参数提供 project 和 location 配置。
 func (c *coordinator) buildGoogleVertexProvider(headers map[string]string, options map[string]string) (fantasy.Provider, error) {
 	opts := []google.Option{}
 	if c.cfg.Config().Options.Debug {
@@ -778,6 +880,7 @@ func (c *coordinator) buildGoogleVertexProvider(headers map[string]string, optio
 	return google.New(opts...)
 }
 
+// buildHyperProvider 构建 Charm Hyper 提供商实例。
 func (c *coordinator) buildHyperProvider(apiKey string) (fantasy.Provider, error) {
 	opts := []hyper.Option{
 		hyper.WithAPIKey(apiKey),
@@ -789,6 +892,8 @@ func (c *coordinator) buildHyperProvider(apiKey string) (fantasy.Provider, error
 	return hyper.New(opts...)
 }
 
+// isAnthropicThinking 检查指定模型是否启用了 Anthropic 的思考（Thinking）模式。
+// 支持通过 Think 字段或 ProviderOptions 中的 thinking 配置启用。
 func (c *coordinator) isAnthropicThinking(model config.SelectedModel) bool {
 	if model.Think {
 		return true
@@ -797,6 +902,21 @@ func (c *coordinator) isAnthropicThinking(model config.SelectedModel) bool {
 	return err == nil && opts.Thinking != nil
 }
 
+// buildProvider 根据提供商配置构建对应的 fantasy.Provider 实例。
+//
+// 支持的提供商类型：
+//   - openai: OpenAI 官方 API
+//   - anthropic: Anthropic Claude API
+//   - openrouter: OpenRouter 路由服务
+//   - vercel: Vercel AI Gateway
+//   - azure: Azure OpenAI
+//   - bedrock: Amazon Bedrock
+//   - google: Google Gemini API
+//   - google-vertex: Google Cloud Vertex AI
+//   - openai-compat: OpenAI 兼容 API（Deepseek、Groq、Copilot 等）
+//   - hyper: Charm Hyper
+//
+// 对于 Anthropic 提供商，如果启用了思考模式，会自动添加必要的 beta 请求头。
 func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model config.SelectedModel, isSubAgent bool) (fantasy.Provider, error) {
 	headers := maps.Clone(providerCfg.ExtraHeaders)
 	if headers == nil {
@@ -847,6 +967,8 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 	}
 }
 
+// isExactoSupported 检查指定模型是否支持 OpenRouter 的 Exacto 模式。
+// Exacto 模式提供更精确的工具调用能力。
 func isExactoSupported(modelID string) bool {
 	supportedModels := []string{
 		"moonshotai/kimi-k2-0905",
@@ -858,30 +980,38 @@ func isExactoSupported(modelID string) bool {
 	return slices.Contains(supportedModels, modelID)
 }
 
+// Cancel 取消指定会话的当前请求。
 func (c *coordinator) Cancel(sessionID string) {
 	c.currentAgent.Cancel(sessionID)
 }
 
+// CancelAll 取消所有活跃会话的请求。
 func (c *coordinator) CancelAll() {
 	c.currentAgent.CancelAll()
 }
 
+// ClearQueue 清空指定会话的消息队列。
 func (c *coordinator) ClearQueue(sessionID string) {
 	c.currentAgent.ClearQueue(sessionID)
 }
 
+// IsBusy 检查是否有任何会话正在处理请求。
 func (c *coordinator) IsBusy() bool {
 	return c.currentAgent.IsBusy()
 }
 
+// IsSessionBusy 检查指定会话是否正在处理请求。
 func (c *coordinator) IsSessionBusy(sessionID string) bool {
 	return c.currentAgent.IsSessionBusy(sessionID)
 }
 
+// Model 返回当前使用的模型配置。
 func (c *coordinator) Model() Model {
 	return c.currentAgent.Model()
 }
 
+// UpdateModels 重新构建并更新 Agent 的模型和工具配置。
+// 在每次 Run 调用前自动执行，确保使用最新的配置。
 func (c *coordinator) UpdateModels(ctx context.Context) error {
 	// build the models again so we make sure we get the latest config
 	large, small, err := c.buildAgentModels(ctx, false)
@@ -903,14 +1033,18 @@ func (c *coordinator) UpdateModels(ctx context.Context) error {
 	return nil
 }
 
+// QueuedPrompts 返回指定会话中排队等待的请求数量。
 func (c *coordinator) QueuedPrompts(sessionID string) int {
 	return c.currentAgent.QueuedPrompts(sessionID)
 }
 
+// QueuedPromptsList 返回指定会话中排队等待的提示词列表。
 func (c *coordinator) QueuedPromptsList(sessionID string) []string {
 	return c.currentAgent.QueuedPromptsList(sessionID)
 }
 
+// Summarize 对指定会话进行摘要压缩。
+// 自动获取当前模型的提供商选项并委托给 SessionAgent 执行。
 func (c *coordinator) Summarize(ctx context.Context, sessionID string) error {
 	providerCfg, ok := c.cfg.Config().Providers.Get(c.currentAgent.Model().ModelCfg.Provider)
 	if !ok {
@@ -919,11 +1053,13 @@ func (c *coordinator) Summarize(ctx context.Context, sessionID string) error {
 	return c.currentAgent.Summarize(ctx, sessionID, getProviderOptions(c.currentAgent.Model(), providerCfg))
 }
 
+// isUnauthorized 检查错误是否为 HTTP 401 未授权错误。
 func (c *coordinator) isUnauthorized(err error) bool {
 	var providerErr *fantasy.ProviderError
 	return errors.As(err, &providerErr) && providerErr.StatusCode == http.StatusUnauthorized
 }
 
+// refreshOAuth2Token 刷新指定提供商的 OAuth2 令牌并更新模型配置。
 func (c *coordinator) refreshOAuth2Token(ctx context.Context, providerCfg config.ProviderConfig) error {
 	if err := c.cfg.RefreshOAuthToken(ctx, config.ScopeGlobal, providerCfg.ID); err != nil {
 		slog.Error("Failed to refresh OAuth token after 401 error", "provider", providerCfg.ID, "error", err)
@@ -935,6 +1071,8 @@ func (c *coordinator) refreshOAuth2Token(ctx context.Context, providerCfg config
 	return nil
 }
 
+// refreshApiKeyTemplate 重新解析 API Key 模板变量并更新模型配置。
+// 用于处理 API Key 通过环境变量模板（如 $MY_API_KEY）配置的场景。
 func (c *coordinator) refreshApiKeyTemplate(ctx context.Context, providerCfg config.ProviderConfig) error {
 	newAPIKey, err := c.cfg.Resolve(providerCfg.APIKeyTemplate)
 	if err != nil {
